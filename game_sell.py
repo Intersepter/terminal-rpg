@@ -1,0 +1,206 @@
+"""
+game_sell.py — Fast item selling interface for Terminal-RPG.
+
+Features:
+  • Sell individual items
+  • Sell all materials (one key)
+  • Sell all consumables (one key)
+  • Sell all gear below a rarity threshold
+  • Stacked items sell by qty or whole stack
+"""
+
+import os
+from game_term import C, clr, W
+from game_items import (
+    Equipment, Item, ItemStack,
+    sell_all_materials, sell_all_consumables,
+    inventory_remove
+)
+
+_R="\033[0m"; _B="\033[1m"
+def _fg(r,g,b): return f"\033[38;2;{r};{g};{b}m"
+_GOLD=_fg(255,215,0);  _WHITE=_fg(255,255,255); _DIM=_fg(100,100,100)
+_GREEN=_fg(80,200,80); _RED=_fg(220,60,60);     _CYAN=_fg(80,220,220)
+_YELL=_fg(240,200,60); _ORAN=_fg(220,140,40);   _PURP=_fg(180,80,220)
+
+RARITY_ORDER = ["common","uncommon","rare","legendary"]
+
+
+def open_sell_screen(player, shop_sell_multiplier=0.5):
+    """
+    Full-screen sell interface. Called from shop or inventory.
+    shop_sell_multiplier: fraction of sell_value the shop pays (default 50%).
+    """
+    inv = player.inventory
+    page, per = 0, 10
+
+    while True:
+        clr()
+        total_items = len(inv)
+        print(C(f"\n{_GOLD}{_B}╔══════════════════════════════════════════╗"))
+        print(C(f"║   💰  SELL ITEMS                          ║"))
+        print(C(f"╚══════════════════════════════════════════╝{_R}"))
+        print(C(f"  {_DIM}Gold: {_GOLD}{player.gold}g{_R}   Bag: {total_items}/{30} slots\n"))
+
+        # Quick sell options
+        mat_val  = _preview_sell_materials(inv, shop_sell_multiplier)
+        cons_val = _preview_sell_consumables(inv, shop_sell_multiplier)
+        gear_val = _preview_sell_common_gear(inv, shop_sell_multiplier)
+
+        print(C(f"  {_GOLD}[M]{_R} Sell ALL materials   → {_GOLD}+{mat_val}g{_R}"))
+        print(C(f"  {_GOLD}[P]{_R} Sell ALL consumables → {_GOLD}+{cons_val}g{_R}"))
+        print(C(f"  {_GOLD}[G]{_R} Sell all COMMON gear → {_GOLD}+{gear_val}g{_R}"))
+        print(C(f"  {_DIM}{'─'*42}{_R}"))
+
+        # Individual item list
+        start = page * per
+        chunk = inv[start:start+per]
+
+        if not inv:
+            print(C(f"  {_DIM}Bag is empty.{_R}"))
+        else:
+            for i, entry in enumerate(chunk):
+                real_idx = start + i
+                if isinstance(entry, ItemStack):
+                    item = entry.item
+                    qty  = entry.qty
+                    sv   = int(item.sell_value * shop_sell_multiplier)
+                    qty_str = f" x{qty}" if qty > 1 else ""
+                    total_str = f"(+{sv*qty}g total)" if qty > 1 else ""
+                    type_col = _item_type_col(item.item_type)
+                    print(C(f"  {_GOLD}[{i+1:2}]{_R} {type_col}{item.name}{qty_str}{_R}  "
+                            f"{_DIM}{total_str}{_R}  {_GOLD}→ {sv}g ea{_R}"))
+                elif isinstance(entry, Equipment):
+                    rar_col = entry.rarity_col()
+                    sv = int(entry.sell_value * shop_sell_multiplier)
+                    print(C(f"  {_GOLD}[{i+1:2}]{_R} {rar_col}{entry.name}{_R}  "
+                            f"{_DIM}[{entry.slot}] {entry.stat_line()}{_R}  {_GOLD}→ {sv}g{_R}"))
+                else:
+                    sv = int(entry.sell_value * shop_sell_multiplier)
+                    type_col = _item_type_col(entry.item_type)
+                    print(C(f"  {_GOLD}[{i+1:2}]{_R} {type_col}{entry.name}{_R}  {_GOLD}→ {sv}g{_R}"))
+
+        total_pages = max(1, (len(inv)-1)//per+1) if inv else 1
+        print(C(f"\n  {_DIM}Page {page+1}/{total_pages}{_R}"))
+        print(C(f"  {_GOLD}[N]{_R} Next  {_GOLD}[B]{_R} Prev  {_GOLD}[0]{_R} Done"))
+
+        ch = input(C(f"\n{_GOLD}>{_R} ")).strip().lower()
+
+        if ch == "0":
+            return
+
+        elif ch == "m":
+            earned = sell_all_materials(inv, player)
+            if earned:
+                print(C(f"{_GREEN}Sold all materials for {_GOLD}+{earned}g{_R}!"))
+            else:
+                print(C(f"{_DIM}No materials to sell.{_R}"))
+            input(C(f"{_DIM}Enter...{_R}"))
+
+        elif ch == "p":
+            earned = sell_all_consumables(inv, player)
+            if earned:
+                print(C(f"{_GREEN}Sold all consumables for {_GOLD}+{earned}g{_R}!"))
+            else:
+                print(C(f"{_DIM}No consumables to sell.{_R}"))
+            input(C(f"{_DIM}Enter...{_R}"))
+
+        elif ch == "g":
+            earned = _sell_common_gear(inv, player, shop_sell_multiplier)
+            if earned:
+                print(C(f"{_GREEN}Sold all common gear for {_GOLD}+{earned}g{_R}!"))
+            else:
+                print(C(f"{_DIM}No common gear to sell.{_R}"))
+            input(C(f"{_DIM}Enter...{_R}"))
+
+        elif ch == "n":
+            if (page+1)*per < len(inv):
+                page += 1
+
+        elif ch == "b":
+            if page > 0:
+                page -= 1
+
+        elif ch.isdigit():
+            idx = int(ch) - 1
+            real_idx = start + idx
+            if 0 <= idx < len(chunk):
+                entry = chunk[idx]
+                if isinstance(entry, ItemStack) and entry.qty > 1:
+                    # Ask how many to sell
+                    print(C(f"  Sell how many? (1–{entry.qty}, or 'a' for all): "), end="", flush=True)
+                    amt_str = input().strip().lower()
+                    if amt_str == "a":
+                        amt = entry.qty
+                    elif amt_str.isdigit():
+                        amt = min(int(amt_str), entry.qty)
+                    else:
+                        continue
+                    sv = int(entry.item.sell_value * shop_sell_multiplier) * amt
+                    entry.qty -= amt
+                    if entry.qty <= 0:
+                        inv.pop(real_idx)
+                    player.gold += sv
+                    print(C(f"{_GREEN}Sold {amt}x {entry.item.name} for {_GOLD}+{sv}g{_R}!"))
+                else:
+                    # Sell single item
+                    item_obj = entry.item if isinstance(entry, ItemStack) else entry
+                    sv = int(item_obj.sell_value * shop_sell_multiplier)
+                    inv.pop(real_idx)
+                    player.gold += sv
+                    print(C(f"{_GREEN}Sold {item_obj.name} for {_GOLD}+{sv}g{_R}!"))
+                input(C(f"{_DIM}Enter...{_R}"))
+                # Keep page in range
+                if page > 0 and start >= len(inv):
+                    page -= 1
+
+
+def _item_type_col(item_type):
+    return {
+        "heal":     _GREEN,
+        "mana":     _CYAN,
+        "god":      _GOLD,
+        "antidote": _YELL,
+        "bomb":     _ORAN,
+        "buff":     _PURP,
+        "material": _DIM,
+    }.get(item_type, _WHITE)
+
+
+def _preview_sell_materials(inv, mult):
+    total = 0
+    for e in inv:
+        if isinstance(e, ItemStack) and e.item.item_type == "material":
+            total += int(e.item.sell_value * mult) * e.qty
+        elif isinstance(e, Item) and not isinstance(e, Equipment) and e.item_type == "material":
+            total += int(e.sell_value * mult)
+    return total
+
+
+def _preview_sell_consumables(inv, mult):
+    consumable_types = {"heal","mana","antidote","bomb","buff"}
+    total = 0
+    for e in inv:
+        if isinstance(e, ItemStack) and e.item.item_type in consumable_types:
+            total += int(e.item.sell_value * mult) * e.qty
+        elif isinstance(e, Item) and not isinstance(e, Equipment) and e.item_type in consumable_types:
+            total += int(e.sell_value * mult)
+    return total
+
+
+def _preview_sell_common_gear(inv, mult):
+    total = 0
+    for e in inv:
+        if isinstance(e, Equipment) and e.rarity == "common":
+            total += int(e.sell_value * mult)
+    return total
+
+
+def _sell_common_gear(inv, player, mult):
+    to_remove = [i for i, e in enumerate(inv)
+                 if isinstance(e, Equipment) and e.rarity == "common"]
+    earned = sum(int(inv[i].sell_value * mult) for i in to_remove)
+    for i in reversed(to_remove):
+        inv.pop(i)
+    player.gold += earned
+    return earned
