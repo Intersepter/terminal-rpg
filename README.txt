@@ -9,7 +9,7 @@ HOW TO INSTALL & RUN:
   3. Run: python main.py
 
   One-line install (Linux/Mac/Windows):
-  git clone https://github.com/YOUR-USERNAME/terminal-rpg.git && cd terminal-rpg && pip install -r requirements.txt && python main.py
+  git clone https://github.com/Intersepter/terminal-rpg.git && cd terminal-rpg && pip install -r requirements.txt && python main.py
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
