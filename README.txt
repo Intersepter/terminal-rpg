@@ -6,7 +6,9 @@
 HOW TO INSTALL & RUN:
   1. Clone or download the repository
   2. Run: pip install -r requirements.txt
-  3. Run: python main.py
+  3. Run: python main.py 
+         - if you are using (WSL)
+         - use (python3 main.py not python main.py
 
   One-line install (Linux/Mac/Windows):
   git clone https://github.com/Intersepter/terminal-rpg.git && cd terminal-rpg && pip install -r requirements.txt && python main.py
